@@ -111,28 +111,21 @@ def pytest_generate_tests(metafunc):
 
 
 @pytest.yield_fixture(scope='session')
-def pg_server(unused_port, docker, session_id, pg_tag, request):
-    if not request.config.option.no_pull:
-        docker.pull('postgres:{}'.format(pg_tag))
-    container = docker.create_container(
-        image='postgres:{}'.format(pg_tag),
-        name='aiopg-test-server-{}-{}'.format(pg_tag, session_id),
-        ports=[5432],
-        detach=True,
-    )
-    docker.start(container=container['Id'])
-    inspection = docker.inspect_container(container['Id'])
-    host = inspection['NetworkSettings']['IPAddress']
-    pg_params = dict(database='postgres',
-                     user='postgres',
-                     password='mysecretpassword',
+def pg_server(unused_port, pg_tag, request):
+    host = '127.0.0.1'
+    port = 5432
+    pg_params = dict(database='aiopg',
+                     user='aiopg',
+                     password='aiopg',
                      host=host,
-                     port=5432)
+                     port=port)
     delay = 0.001
     for i in range(100):
         try:
             conn = psycopg2.connect(**pg_params)
             cur = conn.cursor()
+            cur.execute("DROP SCHEMA public CASCADE;")
+            cur.execute("CREATE SCHEMA public;")
             cur.execute("CREATE EXTENSION hstore;")
             cur.close()
             conn.close()
@@ -142,13 +135,26 @@ def pg_server(unused_port, docker, session_id, pg_tag, request):
             delay *= 2
     else:
         pytest.fail("Cannot start postgres server")
+
+    container = {}
     container['host'] = host
-    container['port'] = 5432
+    container['port'] = port
     container['pg_params'] = pg_params
     yield container
 
-    docker.kill(container=container['Id'])
-    docker.remove_container(container['Id'])
+    for i in range(100):
+        try:
+            conn = psycopg2.connect(**pg_params)
+            cur = conn.cursor()
+            cur.execute("DROP SCHEMA public CASCADE;")
+            cur.close()
+            conn.close()
+            break
+        except psycopg2.Error:
+            time.sleep(delay)
+            delay *= 2
+    else:
+        pytest.fail("Cannot stio postgres server")
 
 
 @pytest.fixture
@@ -177,7 +183,7 @@ def make_connection(loop, pg_params):
     yield go
 
     if conn is not None:
-        loop.run_until_complete(conn.close())
+        conn.close()
 
 
 @pytest.yield_fixture()
